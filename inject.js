@@ -112,6 +112,7 @@
 
     // ===== AudioWorklet 初始化 =====
     async function initAudioWorklet() {
+        console.log('[MoeKoeEQ-MAIN] initAudioWorklet called, audioContext:', !!audioContext);
         if (!audioContext) {
             console.error('[MoeKoeEQ-MAIN] initAudioWorklet: audioContext not available');
             return false;
@@ -148,17 +149,7 @@
 
     // 获取 Worklet 代码
     async function fetchWorkletCode() {
-        // 优先从插件目录加载
-        try {
-            var response = await fetch(chrome.runtime.getURL('eq-processor.js'));
-            if (response.ok) {
-                return await response.text();
-            }
-        } catch (e) {
-            console.warn('[MoeKoeEQ-MAIN] Failed to load eq-processor.js from extension, using inline code');
-        }
-
-        // 如果加载失败，使用内联的简化版本
+        // MAIN world 无法访问 chrome.runtime，直接使用内联代码
         return getInlineWorkletCode();
     }
 
@@ -588,7 +579,11 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
     // ===== 核心初始化 =====
     async function insertEQBeforeGain() {
-        if (isInitialized || !sourceNode || isDestroyed || isInitializing) return;
+        console.log('[MoeKoeEQ-MAIN] insertEQBeforeGain called');
+        if (isInitialized || !sourceNode || isDestroyed || isInitializing) {
+            console.log('[MoeKoeEQ-MAIN] insertEQBeforeGain skipped:', { isInitialized, hasSourceNode: !!sourceNode, isDestroyed, isInitializing });
+            return;
+        }
         isInitializing = true;
 
         try {
@@ -826,6 +821,7 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         var _origCreateMES = OrigAudioContext.prototype.createMediaElementSource;
 
         OrigAudioContext.prototype.createMediaElementSource = function(audioElement) {
+            console.log('[MoeKoeEQ-MAIN] createMediaElementSource called for:', audioElement.tagName);
             var sourceNode;
             try {
                 sourceNode = _origCreateMES.call(this, audioElement);
@@ -834,17 +830,18 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
             }
 
             if (audioElement.tagName === 'AUDIO' && !isDestroyed && !pluginDisabled) {
+                console.log('[MoeKoeEQ-MAIN] Audio element captured, scheduling init...');
                 if (isInitialized) {
                     if (capturedAudioElement === audioElement) return sourceNode;
                     try { resetAudioState(true); } catch (e) {}
                 }
                 capturedAudioElement = audioElement;
                 audioContext = this;
-                sourceNode = sourceNode;
+                var capturedSource = sourceNode; // 保存局部引用
 
                 setTimeout(function() {
-                    if (!isInitialized) {
-                        connectFromExternalSource(sourceNode, audioContext);
+                    if (!isInitialized && capturedSource) {
+                        connectFromExternalSource(capturedSource, audioContext);
                     }
                 }, 100);
             }
@@ -854,7 +851,11 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     }
 
     async function connectFromExternalSource(source, ctx) {
-        if (isInitialized || isDestroyed || isInitializing) return;
+        console.log('[MoeKoeEQ-MAIN] connectFromExternalSource called');
+        if (isInitialized || isDestroyed || isInitializing) {
+            console.log('[MoeKoeEQ-MAIN] connectFromExternalSource skipped:', { isInitialized, isDestroyed, isInitializing });
+            return;
+        }
         
         sourceNode = source;
         audioContext = ctx;
@@ -1165,7 +1166,9 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     });
 
     // ===== 初始化 =====
+    console.log('[MoeKoeEQ-MAIN] Script loaded, installing intercept...');
     installCreateMediaElementSourceIntercept();
+    console.log('[MoeKoeEQ-MAIN] Intercept installed, waiting for audio element...');
 
     // 延迟查找音频元素
     var _initTimers = [];
