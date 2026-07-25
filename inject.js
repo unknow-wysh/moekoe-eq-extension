@@ -178,6 +178,15 @@
     var dynamicEQGainNodes = new Array(31).fill(null);
     var dynamicEQFrameId = null;
 
+    // ===== DynamicEQ 性能优化变量 =====
+    var dynamicEQTimer = null;
+    var dynamicEQInterval = 50; // 20Hz
+    var dynamicEQSleepInterval = 100; // 空闲时 10Hz
+    var dynamicEQLastActivity = Date.now();
+    var dynamicEQSleeping = false;
+    var dynamicEQPrevGains = new Float32Array(31);
+    for (var i = 0; i < 31; i++) dynamicEQPrevGains[i] = 1.0;
+
     var observer = null;
     var stateBroadcastInterval = null;
     var isDestroyed = false;
@@ -1561,114 +1570,102 @@ try {
     }
 
     function startDynamicEQLoop() {
-        if (dynamicEQFrameId) return;
-        if (!dynamicEQAnalyser) {
-            if (audioContext && isInitialized) {
-                initDynamicEQNodes();
-                if (dynamicEQAnalyser) {
-                    connectDynamicEQ();
-                }
-            }
-            if (!dynamicEQAnalyser) {
-                console.warn('[MoeKoeEQ-MAIN] Dynamic EQ: analyser not created, loop aborted');
+        if (!dynamicEQConfig.enabled || !dynamicEQAnalyser) return;
+
+        stopDynamicEQLoop();
+
+        function update() {
+            if (!dynamicEQConfig.enabled || isDestroyed) {
+                stopDynamicEQLoop();
                 return;
+            }
+
+            // 页面不可见时直接休眠
+            if (document.hidden) {
+                if (!dynamicEQSleeping) {
+                    dynamicEQSleeping = true;
+                    restartDynamicEQTimer(dynamicEQSleepInterval);
+                }
+                return;
+            }
+
+            performDynamicEQUpdate();
+        }
+
+        dynamicEQTimer = setInterval(update, dynamicEQInterval);
+    }
+
+    function restartDynamicEQTimer(interval) {
+        if (dynamicEQTimer) clearInterval(dynamicEQTimer);
+
+        dynamicEQTimer = setInterval(function() {
+            if (!dynamicEQConfig.enabled || isDestroyed) {
+                stopDynamicEQLoop();
+                return;
+            }
+
+            performDynamicEQUpdate();
+        }, interval);
+    }
+
+    function performDynamicEQUpdate() {
+        if (!dynamicEQAnalyser) return;
+
+        var freqData = new Uint8Array(dynamicEQAnalyser.frequencyBinCount);
+        dynamicEQAnalyser.getByteFrequencyData(freqData);
+
+        var sampleRate = audioContext.sampleRate;
+        var fftSize = dynamicEQAnalyser.fftSize;
+        var hasSignal = false;
+
+        for (var i = 0; i < 31; i++) {
+            var freq = EQ_FREQUENCIES[i];
+            var bin = Math.round(freq * fftSize / sampleRate);
+            if (bin >= freqData.length) continue;
+
+            var level = freqData[bin] / 255;
+            if (level > 0.02) hasSignal = true;
+
+            var db = level > 0 ? 20 * Math.log10(level) : -100;
+
+            var gain = 1.0;
+            if (db > dynamicEQConfig.threshold) {
+                var excess = db - dynamicEQConfig.threshold;
+                var reduction = excess * (1 - 1 / dynamicEQConfig.ratio);
+                gain = Math.pow(10, -reduction / 20);
+            }
+
+            // 变化小于 0.01 时不更新，减少 setValueAtTime 调用
+            if (Math.abs(gain - dynamicEQPrevGains[i]) > 0.01) {
+                dynamicEQGainNodes[i].gain.setTargetAtTime(
+                    gain,
+                    audioContext.currentTime,
+                    dynamicEQConfig.attack
+                );
+                dynamicEQPrevGains[i] = gain;
             }
         }
-        var freqData = new Float32Array(dynamicEQAnalyser.frequencyBinCount);
-        var lastUpdateTime = 0;
-        var updateInterval = 1000 / 30;
 
-        function getActiveEQNodes() {
-            if (midSideEnabled) return { mid: midEQNodes, side: sideEQNodes };
-            if (channelMode === 'independent') return { left: leftEQNodes, right: rightEQNodes };
-            return { stereo: eqNodes };
+        // 空闲检测
+        if (hasSignal) {
+            dynamicEQLastActivity = Date.now();
+            if (dynamicEQSleeping) {
+                dynamicEQSleeping = false;
+                restartDynamicEQTimer(dynamicEQInterval);
+            }
+        } else if (!dynamicEQSleeping && Date.now() - dynamicEQLastActivity > 3000) {
+            dynamicEQSleeping = true;
+            restartDynamicEQTimer(dynamicEQSleepInterval);
         }
-
-        function loop(timestamp) {
-            if (isDestroyed || !dynamicEQConfig.enabled || !dynamicEQAnalyser || !audioContext) {
-                dynamicEQFrameId = null;
-                return;
-            }
-            if (audioContext.state === 'closed') {
-                dynamicEQFrameId = null;
-                return;
-            }
-            if (audioContext.state === 'suspended') {
-                dynamicEQFrameId = null;
-                // 尝试恢复 AudioContext，恢复后由 watchAudioContextState 重启 loop
-                try { audioContext.resume().catch(function() {}); } catch (e) {}
-                return;
-            }
-            try {
-                if (timestamp - lastUpdateTime < updateInterval) {
-                    dynamicEQFrameId = requestAnimationFrame(loop);
-                    return;
-                }
-
-                dynamicEQAnalyser.getFloatFrequencyData(freqData);
-
-                if (!freqData || freqData.length === 0) {
-                    dynamicEQFrameId = requestAnimationFrame(loop);
-                    return;
-                }
-
-                var sampleRate = audioContext.sampleRate;
-                var binSize = sampleRate / dynamicEQAnalyser.fftSize;
-                var activeNodes = getActiveEQNodes();
-                var nodeSets = Object.keys(activeNodes);
-                var currentTime = audioContext.currentTime;
-
-                for (var b = 0; b < 31; b++) {
-                    var centerBin = Math.round(EQ_FREQUENCIES[b] / binSize);
-                    if (centerBin >= freqData.length || centerBin < 0) continue;
-
-                    var levelDB = freqData[centerBin];
-                    if (!isFinite(levelDB) || levelDB === -Infinity) continue;
-
-                    var baseGain = currentGains[b];
-                    var targetGainDB;
-
-                    if (levelDB > dynamicEQConfig.threshold) {
-                        var overDB = levelDB - dynamicEQConfig.threshold;
-                        var reductionDB = overDB * (dynamicEQConfig.ratio - 1) / dynamicEQConfig.ratio;
-                        targetGainDB = Math.max(-40, baseGain - reductionDB);
-                    } else {
-                        targetGainDB = baseGain;
-                    }
-
-                    for (var s = 0; s < nodeSets.length; s++) {
-                        var nodes = activeNodes[nodeSets[s]];
-                        if (nodes && nodes[b]) {
-                            nodes[b].gain.setTargetAtTime(targetGainDB, currentTime, 0.03);
-                        }
-                    }
-                }
-
-                lastUpdateTime = timestamp;
-            } catch (e) {
-                console.warn('[MoeKoeEQ-MAIN] Dynamic EQ loop error:', e);
-            }
-            dynamicEQFrameId = requestAnimationFrame(loop);
-        }
-        dynamicEQFrameId = requestAnimationFrame(loop);
     }
 
     function stopDynamicEQLoop() {
-if (dynamicEQFrameId) {
-            cancelAnimationFrame(dynamicEQFrameId);
-            dynamicEQFrameId = null;
+        if (dynamicEQTimer) {
+            clearInterval(dynamicEQTimer);
+            dynamicEQTimer = null;
         }
-        if (isInitialized && audioContext && !linearPhaseEnabled) {
-            updateEQNodeGains(eqNodes, currentGains);
-            if (channelMode === 'independent') {
-                updateEQNodeGains(leftEQNodes, leftGains);
-                updateEQNodeGains(rightEQNodes, rightGains);
-            }
-            if (midSideEnabled) {
-                updateEQNodeGains(midEQNodes, midGains);
-                updateEQNodeGains(sideEQNodes, sideGains);
-            }
-        }
+
+        dynamicEQSleeping = false;
     }
 
     function setEQGain(bandIndex, gainDB) {
