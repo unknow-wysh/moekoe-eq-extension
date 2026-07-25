@@ -209,6 +209,8 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                     // 重置效果器状态，防止延迟缓冲区累积
                     this._effectState.delayBuffer.fill(0);
                     this._effectState.delayBuffer2.fill(0);
+                    this._effectState.delayIndex = 0;
+                    this._effectState.delayIndex2 = 0;
                     this._effectState.dynamicBassEnv = 0;
                     this._effectState.deEsserEnv = 0;
                     this._effectState.limiterEnv = 0;
@@ -454,6 +456,10 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             if (pan < 0) right *= (1 + pan);
             else left *= (1 - pan);
         }
+
+        // 限幅后再写入延迟缓冲区，防止正反馈循环导致爆音
+        left = Math.max(-0.9, Math.min(0.9, left));
+        right = Math.max(-0.9, Math.min(0.9, right));
 
         s.delayBuffer[s.delayIndex] = left;
         s.delayIndex = (s.delayIndex + 1) % s.delayBuffer.length;
