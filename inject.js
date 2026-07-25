@@ -204,7 +204,15 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                 if (data.enabled !== undefined) this._eqEnabled = data.enabled;
                 break;
             case 'effects':
-                if (data.effects) Object.assign(this._effects, data.effects);
+                if (data.effects) {
+                    Object.assign(this._effects, data.effects);
+                    // 重置效果器状态，防止延迟缓冲区累积
+                    this._effectState.delayBuffer.fill(0);
+                    this._effectState.delayBuffer2.fill(0);
+                    this._effectState.dynamicBassEnv = 0;
+                    this._effectState.deEsserEnv = 0;
+                    this._effectState.limiterEnv = 0;
+                }
                 if (data.enabled !== undefined) this._effectsEnabled = data.enabled;
                 break;
             case 'limiter':
