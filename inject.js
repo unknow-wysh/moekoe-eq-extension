@@ -541,6 +541,7 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     // ===== 向 Worklet 发送参数 =====
     function sendEQToWorklet() {
         if (!workletNode) return;
+        console.log('[MoeKoeEQ-MAIN] sendEQToWorklet called, gains:', currentGains.slice(0, 5));
         workletNode.port.postMessage({
             type: 'eq',
             gains: currentGains,
@@ -1110,16 +1111,19 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 if (data.data) applySettingsFromStorage(data.data);
                 break;
             case 'set-gain':
-                if (typeof data.band === 'number' && typeof data.gain === 'number') {
-                    setEQGain(data.band, data.gain);
+                var bandIdx = data.band !== undefined ? data.band : data.index;
+                if (typeof bandIdx === 'number' && typeof data.gain === 'number') {
+                    setEQGain(bandIdx, data.gain);
                 }
                 break;
             case 'set-gains':
                 if (data.gains) setEQGains(data.gains);
                 break;
             case 'set-q':
-                if (typeof data.band === 'number' && typeof data.q === 'number') {
-                    setQValue(data.band, data.q);
+            case 'set-q-value':
+                var qBandIdx = data.band !== undefined ? data.band : data.index;
+                if (typeof qBandIdx === 'number' && typeof data.q === 'number') {
+                    setQValue(qBandIdx, data.q);
                 }
                 break;
             case 'set-q-values':
