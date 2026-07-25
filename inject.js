@@ -1106,12 +1106,16 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         var data = event.data;
         if (!data || data.source !== MSG_SRC.CONTENT) return;
 
+        // 调试：记录所有收到的消息
+        console.log('[MoeKoeEQ-MAIN] Received message:', data.type, data);
+
         switch (data.type) {
             case 'apply-settings':
                 if (data.data) applySettingsFromStorage(data.data);
                 break;
             case 'set-gain':
                 var bandIdx = data.band !== undefined ? data.band : data.index;
+                console.log('[MoeKoeEQ-MAIN] set-gain:', bandIdx, data.gain);
                 if (typeof bandIdx === 'number' && typeof data.gain === 'number') {
                     setEQGain(bandIdx, data.gain);
                 }
