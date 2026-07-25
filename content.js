@@ -1569,13 +1569,20 @@ return new Promise(function(resolve) {
             }
             if (lastSpectrumData) drawSpectrum(lastSpectrumData);
             spectrumFrameCounter++;
-            if (spectrumFrameCounter % 2 === 0) {
+            // 每4帧请求一次数据（约15fps），降低CPU占用
+            if (spectrumFrameCounter % 4 === 0) {
                 sendToMain('get-spectrum', {});
             }
             spectrumAnimId = requestAnimationFrame(draw);
         }
         draw();
     }
+
+    // 缓存频谱绘制的频率 bin 范围，避免每帧重复计算
+    var _cachedBarBins = null;
+    var _cachedBarCount = 0;
+    var _cachedBinCount = 0;
+    var _cachedNyquist = 0;
 
     function drawSpectrum(data) {
         if (!spectrumCtx || !spectrumCanvas || !data) return;
@@ -1604,32 +1611,38 @@ return new Promise(function(resolve) {
         var logMin = Math.log10(minFreq);
         var logMax = Math.log10(maxFreq);
 
-        function getAvgValue(freqData, startBin, endBin) {
+        // 缓存频率 bin 范围计算
+        if (!_cachedBarBins || _cachedBarCount !== barCount || _cachedBinCount !== binCount || _cachedNyquist !== nyquist) {
+            _cachedBarBins = new Array(barCount);
+            _cachedBarCount = barCount;
+            _cachedBinCount = binCount;
+            _cachedNyquist = nyquist;
+            for (var i = 0; i < barCount; i++) {
+                var fLow = Math.pow(10, logMin + (logMax - logMin) * i / barCount);
+                var fHigh = Math.pow(10, logMin + (logMax - logMin) * (i + 1) / barCount);
+                var binLow = Math.max(0, Math.min(binCount - 1, Math.round(fLow / nyquist * binCount)));
+                var binHigh = Math.max(0, Math.min(binCount - 1, Math.round(fHigh / nyquist * binCount)));
+                _cachedBarBins[i] = { low: binLow, high: binHigh };
+            }
+        }
+
+        function getAvgValue(freqData, barIdx) {
+            var bins = _cachedBarBins[barIdx];
             var sum = 0, count = 0;
-            var s = Math.max(0, Math.min(binCount - 1, startBin));
-            var e = Math.max(0, Math.min(binCount - 1, endBin));
-            for (var k = s; k <= e; k++) { sum += freqData[k] || 0; count++; }
+            for (var k = bins.low; k <= bins.high; k++) { sum += freqData[k] || 0; count++; }
             return count > 0 ? sum / count / 255 : 0;
         }
 
         spectrumCtx.fillStyle = 'rgba(90,159,212,0.2)';
         for (var i = 0; i < barCount; i++) {
-            var fLow = Math.pow(10, logMin + (logMax - logMin) * i / barCount);
-            var fHigh = Math.pow(10, logMin + (logMax - logMin) * (i + 1) / barCount);
-            var binLow = Math.round(fLow / nyquist * binCount);
-            var binHigh = Math.round(fHigh / nyquist * binCount);
-            var val = getAvgValue(input, binLow, binHigh);
+            var val = getAvgValue(input, i);
             var barH = val * h;
             spectrumCtx.fillRect(i * (barWidth + 1), h - barH, barWidth, barH);
         }
 
         spectrumCtx.fillStyle = 'rgba(90,159,212,0.5)';
         for (var i = 0; i < barCount; i++) {
-            var fLow = Math.pow(10, logMin + (logMax - logMin) * i / barCount);
-            var fHigh = Math.pow(10, logMin + (logMax - logMin) * (i + 1) / barCount);
-            var binLow = Math.round(fLow / nyquist * binCount);
-            var binHigh = Math.round(fHigh / nyquist * binCount);
-            var val = getAvgValue(output, binLow, binHigh);
+            var val = getAvgValue(output, i);
             var barH = val * h;
             spectrumCtx.fillRect(i * (barWidth + 1), h - barH, barWidth, barH);
         }
@@ -1642,9 +1655,10 @@ return new Promise(function(resolve) {
             spectrumCtx.strokeStyle = 'rgba(126,200,123,0.8)';
             spectrumCtx.lineWidth = 1.5;
             spectrumCtx.beginPath();
+            var xScale = w / (logMax - logMin);
             for (var i = 0; i < 31; i++) {
                 var freq = EQ_FREQUENCIES[i];
-                var x = (Math.log10(freq) - logMin) / (logMax - logMin) * w;
+                var x = (Math.log10(freq) - logMin) * xScale;
                 var y = h / 2 - (displayGains[i] / GAIN_MAX) * (h / 2);
                 if (i === 0) spectrumCtx.moveTo(x, y);
                 else spectrumCtx.lineTo(x, y);

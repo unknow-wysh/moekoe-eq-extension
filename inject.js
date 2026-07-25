@@ -1059,13 +1059,13 @@ try {
     function initAnalyser() {
         if (!audioContext) return;
 analyserInput = audioContext.createAnalyser();
-        analyserInput.fftSize = 2048;
-        analyserInput.smoothingTimeConstant = 0.8;
+        analyserInput.fftSize = 1024; // 降低 fftSize 减少 CPU 占用
+        analyserInput.smoothingTimeConstant = 0.7;
         spectrumData = new Uint8Array(analyserInput.frequencyBinCount);
 
         analyserOutput = audioContext.createAnalyser();
-        analyserOutput.fftSize = 2048;
-        analyserOutput.smoothingTimeConstant = 0.8;
+        analyserOutput.fftSize = 1024; // 降低 fftSize 减少 CPU 占用
+        analyserOutput.smoothingTimeConstant = 0.7;
         spectrumOutputData = new Uint8Array(analyserOutput.frequencyBinCount);
     }
 
@@ -2365,13 +2365,26 @@ var preset = null;
         return { matching: true };
     }
 
+    // 缓存频谱数据数组，避免每次创建新数组
+    var _cachedSpectrumInput = null;
+    var _cachedSpectrumOutput = null;
+
     function getSpectrumData() {
         if (!analyserInput || !analyserOutput) return null;
         analyserInput.getByteFrequencyData(spectrumData);
         analyserOutput.getByteFrequencyData(spectrumOutputData);
+        // 复用已有数组，避免 GC 压力
+        if (!_cachedSpectrumInput || _cachedSpectrumInput.length !== spectrumData.length) {
+            _cachedSpectrumInput = new Array(spectrumData.length);
+            _cachedSpectrumOutput = new Array(spectrumOutputData.length);
+        }
+        for (var i = 0; i < spectrumData.length; i++) {
+            _cachedSpectrumInput[i] = spectrumData[i];
+            _cachedSpectrumOutput[i] = spectrumOutputData[i];
+        }
         return {
-            input: Array.prototype.slice.call(spectrumData),
-            output: Array.prototype.slice.call(spectrumOutputData),
+            input: _cachedSpectrumInput,
+            output: _cachedSpectrumOutput,
             sampleRate: audioContext.sampleRate,
             fftSize: analyserInput.fftSize
         };
