@@ -1560,14 +1560,23 @@ return new Promise(function(resolve) {
 
     var lastSpectrumData = null;
     var spectrumFrameCounter = 0;
+    var _lastSpectrumDrawTime = 0;
+    var SPECTRUM_DRAW_INTERVAL = 50; // 20fps 绘制，够流畅且省 CPU
+
     function startSpectrumLoop() {
         isSpectrumActive = true;
+        _lastSpectrumDrawTime = 0;
         function draw() {
             if (!isSpectrumActive || !spectrumCanvas || !isPanelOpen) {
                 isSpectrumActive = false;
                 return;
             }
-            if (lastSpectrumData) drawSpectrum(lastSpectrumData);
+            var now = performance.now();
+            // 限制绘制频率到 20fps
+            if (now - _lastSpectrumDrawTime >= SPECTRUM_DRAW_INTERVAL) {
+                if (lastSpectrumData) drawSpectrum(lastSpectrumData);
+                _lastSpectrumDrawTime = now;
+            }
             spectrumFrameCounter++;
             // 每4帧请求一次数据（约15fps），降低CPU占用
             if (spectrumFrameCounter % 4 === 0) {

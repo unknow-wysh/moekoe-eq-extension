@@ -1075,7 +1075,7 @@ analyserInput = audioContext.createAnalyser();
             return;
         }
         dynamicEQAnalyser = audioContext.createAnalyser();
-        dynamicEQAnalyser.fftSize = 4096;
+        dynamicEQAnalyser.fftSize = 2048; // 从 4096 降到 2048，减少 CPU 占用
         dynamicEQAnalyser.smoothingTimeConstant = 0.6;
         for (var i = 0; i < 31; i++) {
             dynamicEQGainNodes[i] = audioContext.createGain();
@@ -1608,10 +1608,17 @@ try {
         }, interval);
     }
 
+    // 缓存 DynamicEQ 频率数据数组
+    var _cachedDynamicEQFreqData = null;
+
     function performDynamicEQUpdate() {
         if (!dynamicEQAnalyser) return;
 
-        var freqData = new Uint8Array(dynamicEQAnalyser.frequencyBinCount);
+        // 复用数组，避免每次分配新内存
+        if (!_cachedDynamicEQFreqData || _cachedDynamicEQFreqData.length !== dynamicEQAnalyser.frequencyBinCount) {
+            _cachedDynamicEQFreqData = new Uint8Array(dynamicEQAnalyser.frequencyBinCount);
+        }
+        var freqData = _cachedDynamicEQFreqData;
         dynamicEQAnalyser.getByteFrequencyData(freqData);
 
         var sampleRate = audioContext.sampleRate;
