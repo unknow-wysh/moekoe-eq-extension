@@ -194,6 +194,10 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                 if (data.gains) {
                     for (let i = 0; i < 31; i++) this._eqGains[i] = data.gains[i] || 0;
                     this._eqCoeffsDirty = true;
+                    // 重置滤波器状态，防止累积
+                    for (let i = 0; i < 31; i++) {
+                        this._eqFilters[i] = { x1: 0, x2: 0, y1: 0, y2: 0 };
+                    }
                     this.port.postMessage({ type: 'debug', msg: 'EQ gains updated', sample: data.gains.slice(0, 5) });
                 }
                 if (data.qValues) { for (let i = 0; i < 31; i++) this._eqQValues[i] = data.qValues[i] || 1.4; this._eqCoeffsDirty = true; }
@@ -248,13 +252,25 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             if (!c) continue;
             const f = this._eqFilters[i];
             const y = c.b0 * output + c.b1 * f.x1 + c.b2 * f.x2 - c.a1 * f.y1 - c.a2 * f.y2;
+            
+            // 检查 NaN 和异常值
+            if (isNaN(y) || !isFinite(y)) {
+                // 重置滤波器状态
+                f.x1 = 0; f.x2 = 0; f.y1 = 0; f.y2 = 0;
+                continue;
+            }
+            
             f.x2 = f.x1; f.x1 = output; f.y2 = f.y1; f.y1 = y;
             output = y;
+            
+            // 每个频段后限幅，防止级联放大
+            output = Math.max(-2, Math.min(2, output));
         }
-        // 应用增益补偿，防止输出过大
+        // 应用增益补偿
         output *= this._eqCompensation;
-        // 最终限幅保护
-        output = Math.max(-1, Math.min(1, output));
+        // 最终软削波
+        if (output > 0.95) output = 0.95 + (output - 0.95) * 0.1;
+        else if (output < -0.95) output = -0.95 + (output + 0.95) * 0.1;
         return output;
     }
 
