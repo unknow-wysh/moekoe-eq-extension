@@ -1109,67 +1109,67 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         // 调试：记录所有收到的消息
         console.log('[MoeKoeEQ-MAIN] Received message:', data.type, data);
 
+        var payload = data.data || data;
+
         switch (data.type) {
             case 'apply-settings':
-                if (data.data) applySettingsFromStorage(data.data);
+                if (payload) applySettingsFromStorage(payload);
                 break;
             case 'set-gain':
-                var bandIdx = data.band !== undefined ? data.band : data.index;
-                console.log('[MoeKoeEQ-MAIN] set-gain:', bandIdx, data.gain);
-                if (typeof bandIdx === 'number' && typeof data.gain === 'number') {
-                    setEQGain(bandIdx, data.gain);
+                console.log('[MoeKoeEQ-MAIN] set-gain:', payload.index, payload.gain);
+                if (typeof payload.index === 'number' && typeof payload.gain === 'number') {
+                    setEQGain(payload.index, payload.gain);
                 }
                 break;
             case 'set-gains':
-                if (data.gains) setEQGains(data.gains);
+                if (payload.gains) setEQGains(payload.gains);
                 break;
             case 'set-q':
             case 'set-q-value':
-                var qBandIdx = data.band !== undefined ? data.band : data.index;
-                if (typeof qBandIdx === 'number' && typeof data.q === 'number') {
-                    setQValue(qBandIdx, data.q);
+                if (typeof payload.index === 'number' && typeof payload.q === 'number') {
+                    setQValue(payload.index, payload.q);
                 }
                 break;
             case 'set-q-values':
-                if (data.qValues) setQValues(data.qValues);
+                if (payload.qValues) setQValues(payload.qValues);
                 break;
             case 'set-channel-gains':
-                if (data.channel && data.gains) setChannelGains(data.channel, data.gains);
+                if (payload.channel && payload.gains) setChannelGains(payload.channel, payload.gains);
                 break;
             case 'set-channel-mode':
-                if (data.mode) setChannelMode(data.mode);
+                if (payload.channelMode) setChannelMode(payload.channelMode);
                 break;
             case 'set-effect':
                 if (data.name && typeof data.value === 'number') {
-                    setEffect(data.name, data.value);
+                    setEffect(payload.effect, payload.value);
                 }
                 break;
             case 'toggle-effects':
-                if (typeof data.enabled === 'boolean') toggleEffects(data.enabled);
+                if (!pluginDisabled && payload && typeof payload.enabled === 'boolean') toggleEffects(payload.enabled);
                 break;
             case 'toggle-eq':
-                if (typeof data.enabled === 'boolean') toggleEQ(data.enabled);
+                if (!pluginDisabled && payload && typeof payload.enabled === 'boolean') toggleEQ(payload.enabled);
                 break;
             case 'apply-preset':
-                if (data.name) applyPreset(data.name, data.data);
+                if (!pluginDisabled && payload && payload.preset) applyPreset(payload.preset, payload.presetData);
                 break;
             case 'reset-eq':
-                resetEQ();
+                if (!pluginDisabled) resetEQ();
                 break;
             case 'reset-plugin':
                 resetPlugin();
                 break;
             case 'set-dynamic-eq':
-                if (data.config) setDynamicEQ(data.config);
+                if (!pluginDisabled && payload && payload.dynamicEQ) setDynamicEQ(payload.dynamicEQ);
                 break;
             case 'toggle-mid-side':
-                if (typeof data.enabled === 'boolean') toggleMidSide(data.enabled);
+                if (!pluginDisabled && payload && typeof payload.enabled === 'boolean') toggleMidSide(payload.enabled);
                 break;
             case 'toggle-linear-phase':
-                if (typeof data.enabled === 'boolean') toggleLinearPhase(data.enabled);
+                if (!pluginDisabled && payload && typeof payload.enabled === 'boolean') toggleLinearPhase(payload.enabled);
                 break;
-            case 'set-plugin-disabled':
-                if (typeof data.disabled === 'boolean') setPluginDisabled(data.disabled);
+            case 'plugin-disabled':
+                if (payload && typeof payload.disabled === 'boolean') setPluginDisabled(payload.disabled);
                 break;
             case 'get-spectrum':
                 var spectrum = getSpectrumData();
