@@ -884,21 +884,30 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     }
 
     async function fallbackConnect(audioElement) {
-        if (isInitialized || isDestroyed || isInitializing) return;
+        console.log('[MoeKoeEQ-MAIN] fallbackConnect called');
+        if (isInitialized || isDestroyed || isInitializing) {
+            console.log('[MoeKoeEQ-MAIN] fallbackConnect skipped:', { isInitialized, isDestroyed, isInitializing });
+            return;
+        }
         _isFallbackConnect = true;
 
         try {
             if (!audioElement) {
                 audioElement = document.querySelector('audio');
+                console.log('[MoeKoeEQ-MAIN] Looking for audio element:', !!audioElement);
                 if (!audioElement) {
                     audioElement = findAudioInShadowDOM(document);
+                    console.log('[MoeKoeEQ-MAIN] Looking in Shadow DOM:', !!audioElement);
                 }
             }
 
             if (!audioElement || hasFailedAudioElement(audioElement)) {
+                console.log('[MoeKoeEQ-MAIN] No valid audio element found');
                 _isFallbackConnect = false;
                 return;
             }
+
+            console.log('[MoeKoeEQ-MAIN] Audio element found, creating AudioContext...');
 
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             sourceNode = audioContext.createMediaElementSource(audioElement);
