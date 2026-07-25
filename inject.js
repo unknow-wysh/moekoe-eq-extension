@@ -212,10 +212,12 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
     }
 
     _updateEQCoeffs() {
+        let maxGain = 0;
         for (let i = 0; i < 31; i++) {
             const gain = this._eqGains[i];
             const q = this._eqQValues[i];
             const freq = EQ_FREQUENCIES[i];
+            if (Math.abs(gain) > maxGain) maxGain = Math.abs(gain);
             if (Math.abs(gain) < 0.01) { this._eqCoeffs[i] = null; continue; }
             const w0 = 2 * Math.PI * freq / this._sampleRate;
             const cosw0 = Math.cos(w0);
@@ -231,6 +233,9 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                 a2: (1 - alpha / A) / a0
             };
         }
+        // 计算增益补偿：根据最大增益自动降低输出
+        // 例如 +6dB 增益 → 补偿 -6dB，避免削波
+        this._eqCompensation = maxGain > 0 ? Math.pow(10, -maxGain / 20) : 1.0;
         this._eqCoeffsDirty = false;
     }
 
@@ -245,9 +250,11 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             const y = c.b0 * output + c.b1 * f.x1 + c.b2 * f.x2 - c.a1 * f.y1 - c.a2 * f.y2;
             f.x2 = f.x1; f.x1 = output; f.y2 = f.y1; f.y1 = y;
             output = y;
-            // 每个频段处理后立即限幅，防止级联放大
-            output = Math.max(-1, Math.min(1, output));
         }
+        // 应用增益补偿，防止输出过大
+        output *= this._eqCompensation;
+        // 最终限幅保护
+        output = Math.max(-1, Math.min(1, output));
         return output;
     }
 
