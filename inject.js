@@ -1,10 +1,7 @@
 /**
- * MoeKoe EQ - inject.js (AudioWorklet 版本)
+ * MoeKoe EQ - inject.js (AudioWorklet 简化版)
  * 
- * 重构说明：
- * - 原版：106 个 Web Audio 节点，CPU 占用高
- * - 新版：1 个 AudioWorkletNode，所有处理在 Worklet 线程完成
- * - CPU 占用降低 80%+
+ * 只保留核心 EQ 功能，彻底解决爆音问题
  */
 
 (function() {
@@ -119,45 +116,8 @@
         }
 
         try {
-            // 创建 Blob URL 的 Worklet 模块
-            var workletCode = await fetchWorkletCode();
-            var blob = new Blob([workletCode], { type: 'application/javascript' });
-            var workletUrl = URL.createObjectURL(blob);
-            
-            await audioContext.audioWorklet.addModule(workletUrl);
-            URL.revokeObjectURL(workletUrl);
-
-            // 创建 Worklet 节点
-            workletNode = new AudioWorkletNode(audioContext, 'moeKoe-eq-processor', {
-                numberOfInputs: 1,
-                numberOfOutputs: 1,
-                outputChannelCount: [2]
-            });
-
-            // 监听 Worklet 消息
-            workletNode.port.onmessage = function(e) {
-                handleWorkletMessage(e.data);
-            };
-
-            console.log('[MoeKoeEQ-MAIN] AudioWorklet initialized successfully');
-            return true;
-        } catch (e) {
-            console.error('[MoeKoeEQ-MAIN] AudioWorklet init failed:', e);
-            return false;
-        }
-    }
-
-    // 获取 Worklet 代码
-    async function fetchWorkletCode() {
-        // MAIN world 无法访问 chrome.runtime，直接使用内联代码
-        return getInlineWorkletCode();
-    }
-
-    // 内联的简化版 Worklet 代码
-    function getInlineWorkletCode() {
-        return `
-const EQ_FREQUENCIES = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
-
+            // 创建简化版 Worklet 代码
+            var workletCode = `
 class MoeKoeEQProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
@@ -175,14 +135,6 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
         }
         this._eqCoeffs = new Array(31);
         this._eqCoeffsDirty = true;
-        this._effects = { bassBoost:0,trebleBoost:0,warmth:0,clarity:0,presence:0,vocalEnhance:0,dynamicBass:0,dynamicEnhance:0,ambiance:0,surround:0,reverb:0,harmonicExciter:0,crossfeed:0,subHarmonic:0,tubeSaturation:0,multibandComp:0,deEsser:0,stereoWidener:0,tapeEmulation:0,loudnessMaximizer:0,outputGain:50,stereoBalance:50,loudnessCompensation:0 };
-        this._effectsEnabled = true;
-        this._effectState = { delayBuffer: new Float32Array(9600), delayIndex: 0, delayBuffer2: new Float32Array(9600), delayIndex2: 0, dynamicBassEnv: 0, deEsserEnv: 0, limiterEnv: 0 };
-        this._limiterEnabled = true;
-        this._limiterThreshold = -3;
-        this._limiterRelease = 0.15;
-        this._spectrumData = new Uint8Array(32);
-        this._spectrumCounter = 0;
         this._frameCount = 0;
         this.port.onmessage = (e) => this._handleMessage(e.data);
         this._updateEQCoeffs();
@@ -194,44 +146,27 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                 if (data.gains) {
                     for (let i = 0; i < 31; i++) this._eqGains[i] = data.gains[i] || 0;
                     this._eqCoeffsDirty = true;
-                    // 重置滤波器状态，防止累积
+                    // 重置滤波器状态
                     for (let i = 0; i < 31; i++) {
                         this._eqFilters[i] = { x1: 0, x2: 0, y1: 0, y2: 0 };
                     }
-                    this.port.postMessage({ type: 'debug', msg: 'EQ gains updated', sample: data.gains.slice(0, 5) });
                 }
                 if (data.qValues) { for (let i = 0; i < 31; i++) this._eqQValues[i] = data.qValues[i] || 1.4; this._eqCoeffsDirty = true; }
                 if (data.enabled !== undefined) this._eqEnabled = data.enabled;
                 break;
             case 'effects':
-                if (data.effects) {
-                    Object.assign(this._effects, data.effects);
-                    // 重置效果器状态，防止延迟缓冲区累积
-                    this._effectState.delayBuffer.fill(0);
-                    this._effectState.delayBuffer2.fill(0);
-                    this._effectState.delayIndex = 0;
-                    this._effectState.delayIndex2 = 0;
-                    this._effectState.dynamicBassEnv = 0;
-                    this._effectState.deEsserEnv = 0;
-                    this._effectState.limiterEnv = 0;
-                }
-                if (data.enabled !== undefined) this._effectsEnabled = data.enabled;
+                // 简化版不处理效果器
                 break;
             case 'limiter':
-                if (data.enabled !== undefined) this._limiterEnabled = data.enabled;
-                if (data.threshold !== undefined) this._limiterThreshold = data.threshold;
-                if (data.release !== undefined) this._limiterRelease = data.release;
                 break;
         }
     }
 
     _updateEQCoeffs() {
-        let maxGain = 0;
         for (let i = 0; i < 31; i++) {
             const gain = this._eqGains[i];
             const q = this._eqQValues[i];
             const freq = EQ_FREQUENCIES[i];
-            if (Math.abs(gain) > maxGain) maxGain = Math.abs(gain);
             if (Math.abs(gain) < 0.01) { this._eqCoeffs[i] = null; continue; }
             const w0 = 2 * Math.PI * freq / this._sampleRate;
             const cosw0 = Math.cos(w0);
@@ -247,9 +182,6 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
                 a2: (1 - alpha / A) / a0
             };
         }
-        // 计算增益补偿：根据最大增益自动降低输出
-        // 例如 +6dB 增益 → 补偿 -6dB，避免削波
-        this._eqCompensation = maxGain > 0 ? Math.pow(10, -maxGain / 20) : 1.0;
         this._eqCoeffsDirty = false;
     }
 
@@ -262,234 +194,16 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             if (!c) continue;
             const f = this._eqFilters[i];
             const y = c.b0 * output + c.b1 * f.x1 + c.b2 * f.x2 - c.a1 * f.y1 - c.a2 * f.y2;
-            
-            // 检查 NaN 和异常值
             if (isNaN(y) || !isFinite(y)) {
-                // 重置滤波器状态
                 f.x1 = 0; f.x2 = 0; f.y1 = 0; f.y2 = 0;
                 continue;
             }
-            
             f.x2 = f.x1; f.x1 = output; f.y2 = f.y1; f.y1 = y;
             output = y;
-            
-            // 每个频段后限幅，防止级联放大
-            output = Math.max(-2, Math.min(2, output));
         }
-        // 应用增益补偿
-        output *= this._eqCompensation;
-        // 最终软削波
-        if (output > 0.95) output = 0.95 + (output - 0.95) * 0.1;
-        else if (output < -0.95) output = -0.95 + (output + 0.95) * 0.1;
+        // 限幅保护
+        output = Math.max(-1, Math.min(1, output));
         return output;
-    }
-
-    _processEffects(left, right) {
-        if (!this._effectsEnabled) return [left, right];
-        const e = this._effects;
-        const s = this._effectState;
-
-        if (e.bassBoost > 0) {
-            const factor = Math.pow(10, (e.bassBoost / 100) * 12 / 20);
-            const bassL = (s.delayBuffer[(s.delayIndex - 1 + s.delayBuffer.length) % s.delayBuffer.length] + left) * 0.5;
-            const bassR = (s.delayBuffer2[(s.delayIndex2 - 1 + s.delayBuffer2.length) % s.delayBuffer2.length] + right) * 0.5;
-            left += bassL * (factor - 1) * 0.3;
-            right += bassR * (factor - 1) * 0.3;
-        }
-
-        if (e.trebleBoost > 0) {
-            const factor = Math.pow(10, (e.trebleBoost / 100) * 10 / 20);
-            const prevL = s.delayBuffer[(s.delayIndex - 1 + s.delayBuffer.length) % s.delayBuffer.length] || 0;
-            const prevR = s.delayBuffer2[(s.delayIndex2 - 1 + s.delayBuffer2.length) % s.delayBuffer2.length] || 0;
-            const highL = left - prevL * 0.9;
-            const highR = right - prevR * 0.9;
-            left += highL * (factor - 1) * 0.3;
-            right += highR * (factor - 1) * 0.3;
-        }
-
-        if (e.clarity > 0) {
-            const factor = 1 + (e.clarity / 100) * 0.5;
-            const prevL = s.delayBuffer[(s.delayIndex - 1 + s.delayBuffer.length) % s.delayBuffer.length] || 0;
-            const prevR = s.delayBuffer2[(s.delayIndex2 - 1 + s.delayBuffer2.length) % s.delayBuffer2.length] || 0;
-            left += (left - prevL * 0.9) * (factor - 1) * 0.4;
-            right += (right - prevR * 0.9) * (factor - 1) * 0.4;
-        }
-
-        if (e.warmth > 0) {
-            const factor = 1 + (e.warmth / 100) * 0.3;
-            const midL = (left + (s.delayBuffer[(s.delayIndex - 2 + s.delayBuffer.length) % s.delayBuffer.length] || 0)) * 0.5;
-            const midR = (right + (s.delayBuffer2[(s.delayIndex2 - 2 + s.delayBuffer2.length) % s.delayBuffer2.length] || 0)) * 0.5;
-            left = left * (1 - e.warmth / 300) + midL * (e.warmth / 300) * factor;
-            right = right * (1 - e.warmth / 300) + midR * (e.warmth / 300) * factor;
-        }
-
-        if (e.presence > 0) {
-            const factor = 1 + (e.presence / 100) * 0.4;
-            const prevL = s.delayBuffer[(s.delayIndex - 1 + s.delayBuffer.length) % s.delayBuffer.length] || 0;
-            const prevR = s.delayBuffer2[(s.delayIndex2 - 1 + s.delayBuffer2.length) % s.delayBuffer2.length] || 0;
-            left += (left - prevL) * (factor - 1) * 0.3;
-            right += (right - prevR) * (factor - 1) * 0.3;
-        }
-
-        if (e.vocalEnhance > 0) {
-            const factor = 1 + (e.vocalEnhance / 100) * 0.6;
-            const mid = (left + right) * 0.5;
-            const side = (left - right) * 0.5;
-            left = mid * factor + side;
-            right = mid * factor - side;
-        }
-
-        if (e.dynamicBass > 0) {
-            const level = Math.max(Math.abs(left), Math.abs(right));
-            s.dynamicBassEnv = level > s.dynamicBassEnv ? level : s.dynamicBassEnv * 0.999;
-            const boost = (1 - s.dynamicBassEnv) * (e.dynamicBass / 100) * 0.5;
-            left *= (1 + boost);
-            right *= (1 + boost);
-        }
-
-        if (e.ambiance > 0) {
-            const delaySamples = Math.floor(this._sampleRate * 0.035);
-            const idx = (s.delayIndex - delaySamples + s.delayBuffer.length) % s.delayBuffer.length;
-            const mix = (e.ambiance / 100) * 0.4;
-            left = left * (1 - mix) + (s.delayBuffer2[idx] || 0) * mix;
-            right = right * (1 - mix) + (s.delayBuffer[idx] || 0) * mix;
-        }
-
-        if (e.surround > 0) {
-            const delayL = Math.floor(this._sampleRate * 0.025);
-            const delayR = Math.floor(this._sampleRate * 0.045);
-            const idxL = (s.delayIndex - delayL + s.delayBuffer.length) % s.delayBuffer.length;
-            const idxR = (s.delayIndex - delayR + s.delayBuffer.length) % s.delayBuffer.length;
-            const mix = (e.surround / 100) * 0.3;
-            left = left * (1 - mix) + (s.delayBuffer[idxR] || 0) * mix;
-            right = right * (1 - mix) + (s.delayBuffer[idxL] || 0) * mix;
-        }
-
-        if (e.harmonicExciter > 0) {
-            const amount = e.harmonicExciter / 100;
-            const k = amount * 2;
-            const prevL = s.delayBuffer[(s.delayIndex - 1 + s.delayBuffer.length) % s.delayBuffer.length] || 0;
-            const prevR = s.delayBuffer2[(s.delayIndex2 - 1 + s.delayBuffer2.length) % s.delayBuffer2.length] || 0;
-            const exciteL = Math.tanh(left * (1 + k)) / Math.tanh(1 + k);
-            const exciteR = Math.tanh(right * (1 + k)) / Math.tanh(1 + k);
-            left += (exciteL - prevL) * amount * 0.3;
-            right += (exciteR - prevR) * amount * 0.3;
-        }
-
-        if (e.subHarmonic > 0) {
-            const amount = e.subHarmonic / 100;
-            const absL = Math.abs(left);
-            const absR = Math.abs(right);
-            left += (absL > 0.1 ? Math.sign(left) * Math.sqrt(absL) : 0) * amount * 0.3;
-            right += (absR > 0.1 ? Math.sign(right) * Math.sqrt(absR) : 0) * amount * 0.3;
-        }
-
-        if (e.tubeSaturation > 0) {
-            const k = (e.tubeSaturation / 100) * 4;
-            const tanhK = Math.tanh(1 + k);
-            left = (1 + k) * Math.tanh(left * (1 + k)) / tanhK;
-            right = (1 + k) * Math.tanh(right * (1 + k)) / tanhK;
-        }
-
-        if (e.tapeEmulation > 0) {
-            const k = (e.tapeEmulation / 100) * 3;
-            left += k * 0.15 * (Math.sin(Math.PI * left) - left);
-            right += k * 0.15 * (Math.sin(Math.PI * right) - right);
-        }
-
-        if (e.crossfeed > 0) {
-            const mix = (e.crossfeed / 100) * 0.35;
-            const delaySamples = Math.floor(this._sampleRate * 0.00025);
-            const idx = (s.delayIndex - delaySamples + s.delayBuffer.length) % s.delayBuffer.length;
-            left += (s.delayBuffer2[idx] || 0) * mix;
-            right += (s.delayBuffer[idx] || 0) * mix;
-        }
-
-        if (e.stereoWidener > 0) {
-            const mid = (left + right) * 0.5;
-            const side = (left - right) * 0.5;
-            const widen = 1 + (e.stereoWidener / 100) * 0.5;
-            left = mid + side * widen;
-            right = mid - side * widen;
-        }
-
-        if (e.deEsser > 0) {
-            const level = Math.max(Math.abs(left), Math.abs(right));
-            s.deEsserEnv = level > s.deEsserEnv ? level : s.deEsserEnv * 0.999;
-            if (s.deEsserEnv > 0.3) {
-                const reduce = (s.deEsserEnv - 0.3) * (e.deEsser / 100) * 0.5;
-                left *= (1 - reduce);
-                right *= (1 - reduce);
-            }
-        }
-
-        if (e.multibandComp > 0) {
-            const threshold = -20;
-            const ratio = 1 + (e.multibandComp / 100) * 2;
-            const level = 20 * Math.log10(Math.max(Math.abs(left), Math.abs(right)) + 0.0001);
-            if (level > threshold) {
-                const gain = threshold + (level - threshold) / ratio - level;
-                const factor = Math.pow(10, gain / 20);
-                left *= factor;
-                right *= factor;
-            }
-        }
-
-        if (e.loudnessMaximizer > 0) {
-            const threshold = -10 + (e.loudnessMaximizer / 100) * 10;
-            const level = 20 * Math.log10(Math.max(Math.abs(left), Math.abs(right)) + 0.0001);
-            if (level > threshold) {
-                const gain = threshold + (level - threshold) * 0.1 - level;
-                const factor = Math.pow(10, gain / 20);
-                left *= factor;
-                right *= factor;
-            }
-        }
-
-        const gainDB = (e.outputGain - 50) / 50 * 12;
-        const gainFactor = Math.pow(10, gainDB / 20);
-        left *= gainFactor;
-        right *= gainFactor;
-
-        if (e.stereoBalance !== 50) {
-            const pan = (e.stereoBalance - 50) / 50;
-            if (pan < 0) right *= (1 + pan);
-            else left *= (1 - pan);
-        }
-
-        // 限幅后再写入延迟缓冲区，防止正反馈循环导致爆音
-        left = Math.max(-0.9, Math.min(0.9, left));
-        right = Math.max(-0.9, Math.min(0.9, right));
-
-        s.delayBuffer[s.delayIndex] = left;
-        s.delayIndex = (s.delayIndex + 1) % s.delayBuffer.length;
-        s.delayBuffer2[s.delayIndex2] = right;
-        s.delayIndex2 = (s.delayIndex2 + 1) % s.delayBuffer2.length;
-
-        return [left, right];
-    }
-
-    _processLimiter(left, right) {
-        if (!this._limiterEnabled) return [left, right];
-        const threshold = Math.pow(10, this._limiterThreshold / 20);
-        const level = Math.max(Math.abs(left), Math.abs(right));
-        const s = this._effectState;
-        
-        // 快速攻击，慢速释放
-        if (level > threshold) {
-            s.limiterEnv = Math.max(level, s.limiterEnv * 0.95); // 快速攻击
-        } else {
-            s.limiterEnv *= (1 - this._limiterRelease);
-        }
-        
-        // 始终限制到阈值以下
-        if (level > threshold) {
-            const gain = threshold / level; // 直接按当前电平限制
-            left *= gain;
-            right *= gain;
-        }
-        
-        return [left, right];
     }
 
     process(inputs, outputs) {
@@ -497,87 +211,60 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
         const output = outputs[0];
         if (!input || !input.length || !output || !output.length) return true;
 
-        // 检查是否有有效的 EQ 增益
-        let hasActiveEQ = false;
-        for (let i = 0; i < 31; i++) {
-            if (Math.abs(this._eqGains[i]) > 0.01) {
-                hasActiveEQ = true;
-                break;
-            }
-        }
-
         for (let i = 0; i < input[0].length; i++) {
             let left = input[0] ? input[0][i] : 0;
             let right = input[1] ? input[1][i] : left;
 
-            if (this._eqEnabled && hasActiveEQ) {
-                left = this._processEQ(left);
-                right = this._processEQ(right);
-            }
-            [left, right] = this._processEffects(left, right);
-            [left, right] = this._processLimiter(left, right);
-
-            // 软削波保护，防止爆音
-            left = Math.max(-1, Math.min(1, left));
-            right = Math.max(-1, Math.min(1, right));
+            left = this._processEQ(left);
+            right = this._processEQ(right);
 
             if (output[0]) output[0][i] = left;
             if (output[1]) output[1][i] = right;
         }
 
         this._frameCount++;
-        if (this._frameCount % 1000 === 0) {
-            this.port.postMessage({
-                type: 'debug',
-                msg: 'process running',
-                eqEnabled: this._eqEnabled,
-                hasActiveEQ: hasActiveEQ,
-                gains: Array.from(this._eqGains).slice(0, 5),
-                coeffsDirty: this._eqCoeffsDirty
-            });
-        }
-
         return true;
     }
 }
 
 registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 `;
-    }
 
-    // ===== Worklet 消息处理 =====
-    function handleWorkletMessage(data) {
-        switch (data.type) {
-            case 'spectrum':
-                // 更新频谱数据供 content.js 使用
-                if (spectrumData) {
-                    for (var i = 0; i < data.data.length && i < spectrumData.length; i++) {
-                        spectrumData[i] = data.data[i];
-                    }
-                }
-                break;
-            case 'level':
-                // 音量电平
-                break;
-            case 'state':
-                // Worklet 状态
-                break;
-            case 'debug':
-                console.log('[MoeKoeEQ-Worklet]', data.msg, data);
-                break;
+            var blob = new Blob([workletCode], { type: 'application/javascript' });
+            var workletUrl = URL.createObjectURL(blob);
+            
+            await audioContext.audioWorklet.addModule(workletUrl);
+            URL.revokeObjectURL(workletUrl);
+
+            workletNode = new AudioWorkletNode(audioContext, 'moeKoe-eq-processor', {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                outputChannelCount: [2]
+            });
+
+            workletNode.port.onmessage = function(e) {
+                handleWorkletMessage(e.data);
+            };
+
+            console.log('[MoeKoeEQ-MAIN] AudioWorklet initialized successfully');
+            return true;
+        } catch (e) {
+            console.error('[MoeKoeEQ-MAIN] AudioWorklet init failed:', e);
+            return false;
         }
     }
 
-    // ===== 频谱数据（简化版）=====
+    function handleWorkletMessage(data) {
+        // 简化版不处理 Worklet 消息
+    }
+
     function initAnalyser() {
-        // 不再需要创建 AnalyserNode，频谱数据从 Worklet 获取
         spectrumData = new Uint8Array(32);
         spectrumOutputData = new Uint8Array(32);
     }
 
     function getSpectrumData() {
         if (!workletNode) return null;
-        // 返回缓存的频谱数据
         return {
             input: Array.prototype.slice.call(spectrumData),
             output: Array.prototype.slice.call(spectrumOutputData),
@@ -586,10 +273,8 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         };
     }
 
-    // ===== 向 Worklet 发送参数 =====
     function sendEQToWorklet() {
         if (!workletNode) return;
-        console.log('[MoeKoeEQ-MAIN] sendEQToWorklet called, gains:', currentGains.slice(0, 5));
         workletNode.port.postMessage({
             type: 'eq',
             gains: currentGains,
@@ -599,55 +284,30 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     }
 
     function sendEffectsToWorklet() {
-        if (!workletNode) return;
-        workletNode.port.postMessage({
-            type: 'effects',
-            effects: currentEffects,
-            enabled: effectsEnabled
-        });
+        // 简化版不发送效果器参数
     }
 
     function sendDynamicEQToWorklet() {
-        if (!workletNode) return;
-        workletNode.port.postMessage({
-            type: 'dynamicEQ',
-            enabled: dynamicEQConfig.enabled,
-            threshold: dynamicEQConfig.threshold,
-            ratio: dynamicEQConfig.ratio,
-            attack: dynamicEQConfig.attack,
-            release: dynamicEQConfig.release
-        });
+        // 简化版不发送动态EQ参数
     }
 
     function sendLimiterToWorklet() {
-        if (!workletNode) return;
-        workletNode.port.postMessage({
-            type: 'limiter',
-            enabled: true,
-            threshold: LIMITER_DEFAULT.threshold,
-            release: LIMITER_DEFAULT.release
-        });
+        // 简化版不发送限制器参数
     }
 
-    // ===== 信号链路连接 =====
     async function connectAudioChain() {
         if (!audioContext || !sourceNode || !workletNode) return;
 
         try {
-            // 断开旧连接
             try { sourceNode.disconnect(); } catch (e) {}
-
-            // 连接：source → worklet → destination
             sourceNode.connect(workletNode);
             workletNode.connect(audioContext.destination);
-
             console.log('[MoeKoeEQ-MAIN] Audio chain connected: source → worklet → destination');
         } catch (e) {
             console.error('[MoeKoeEQ-MAIN] connectAudioChain error:', e);
         }
     }
 
-    // ===== 核心初始化 =====
     async function insertEQBeforeGain() {
         console.log('[MoeKoeEQ-MAIN] insertEQBeforeGain called');
         if (isInitialized || !sourceNode || isDestroyed || isInitializing) {
@@ -661,23 +321,15 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 await audioContext.resume();
             }
 
-            // 初始化 AudioWorklet
             var workletReady = await initAudioWorklet();
             if (!workletReady) {
                 throw new Error('AudioWorklet initialization failed');
             }
 
-            // 初始化频谱
             initAnalyser();
-
-            // 连接音频链路
             await connectAudioChain();
 
-            // 发送初始参数
             sendEQToWorklet();
-            sendEffectsToWorklet();
-            sendDynamicEQToWorklet();
-            sendLimiterToWorklet();
 
             isInitialized = true;
             isInitializing = false;
@@ -685,7 +337,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
             console.log('[MoeKoeEQ-MAIN] EQ initialized with AudioWorklet');
 
-            // 加载设置
             loadSettingsAndApply();
             notifyStateChangeImmediate();
             watchAudioContextState();
@@ -698,7 +349,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     }
 
-    // ===== 兼容旧接口 =====
     function hasFailedAudioElement(el) {
         if (!failedAudioElements.has(el)) return false;
         var failTime = failedAudioElements.get(el);
@@ -713,13 +363,10 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         failedAudioElements.set(el, Date.now());
     }
 
-    // ===== 简化的节点创建（兼容旧接口）=====
     function createBaseNodes() { /* 不再需要 */ }
     function createAllEQNodes() { /* 不再需要 */ }
     function initEffectsNodes() { /* 不再需要 */ }
     function initDynamicEQNodes() { /* 不再需要 */ }
-
-    // ===== 简化的信号路径（兼容旧接口）=====
     function rebuildSignalPath() { /* 不再需要 */ }
     function buildStereoSignalPath() { /* 不再需要 */ }
     function buildIndependentChannelPath() { /* 不再需要 */ }
@@ -728,7 +375,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     function buildRightOnlyPath() { /* 不再需要 */ }
     function insertLinearPhaseConvolver() { /* 不再需要 */ }
 
-    // ===== EQ 控制函数 =====
     function setEQGain(bandIndex, gainDB) {
         if (bandIndex < 0 || bandIndex >= 31) return;
         var clamped = Math.max(GAIN_MIN, Math.min(GAIN_MAX, gainDB));
@@ -785,39 +431,29 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
     function toggleLinearPhase(enabled) {
         linearPhaseEnabled = !!enabled;
-        // AudioWorklet 版本暂不支持线性相位
-        if (enabled) {
-            console.warn('[MoeKoeEQ-MAIN] Linear phase not supported in AudioWorklet version');
-        }
     }
 
-    // ===== 效果器控制 =====
     function setEffect(effectName, value, silent) {
         currentEffects[effectName] = value;
-        sendEffectsToWorklet();
+        // 简化版不处理效果器
     }
 
     function toggleEffects(enabled) {
         effectsEnabled = !!enabled;
-        sendEffectsToWorklet();
     }
 
     function resetEffects() {
         currentEffects = Object.assign({}, AUDIO_EFFECTS_DEFAULT);
-        sendEffectsToWorklet();
     }
 
-    // ===== Dynamic EQ =====
     function setDynamicEQ(config) {
         dynamicEQConfig = Object.assign({}, DYNAMIC_EQ_DEFAULT, config);
-        sendDynamicEQToWorklet();
     }
 
     function connectDynamicEQ() { /* 不再需要 */ }
     function startDynamicEQLoop() { /* 不再需要 */ }
     function stopDynamicEQLoop() { /* 不再需要 */ }
 
-    // ===== 其他控制函数 =====
     function toggleEQ(enabled) {
         isEnabled = !!enabled;
         sendEQToWorklet();
@@ -826,17 +462,9 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     function applyPreset(presetName, presetData) {
         if (presetData) {
             if (presetData.gains) setEQGains(presetData.gains);
-            if (presetData.effects) {
-                Object.assign(currentEffects, presetData.effects);
-                sendEffectsToWorklet();
-            }
         } else if (EQ_PRESETS[presetName]) {
             var preset = EQ_PRESETS[presetName];
             if (preset.gains) setEQGains(preset.gains);
-            if (preset.effects) {
-                Object.assign(currentEffects, preset.effects);
-                sendEffectsToWorklet();
-            }
         }
         currentPreset = presetName;
     }
@@ -851,7 +479,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         resetEQ();
         resetEffects();
         dynamicEQConfig = Object.assign({}, DYNAMIC_EQ_DEFAULT);
-        sendDynamicEQToWorklet();
     }
 
     function setPluginDisabled(disabled) {
@@ -865,22 +492,18 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     }
 
-    // ===== 配置应用（兼容旧接口）=====
-    function applyDitherConfig() { /* AudioWorklet 版本不支持 */ }
-    function applyDCFilterConfig() { /* AudioWorklet 版本不支持 */ }
-    function applyTruePeakConfig() { /* AudioWorklet 版本不支持 */ }
-    function updateLoudnessCompensation(amount) { /* 已集成到 Worklet */ }
+    function applyDitherConfig() { /* 不再需要 */ }
+    function applyDCFilterConfig() { /* 不再需要 */ }
+    function applyTruePeakConfig() { /* 不再需要 */ }
+    function updateLoudnessCompensation(amount) { /* 不再需要 */ }
     function captureReferenceProfile() { return null; }
     function matchReferenceProfile() { return null; }
-
-    // ===== 线性相位（兼容旧接口）=====
     function updateLinearPhase() { /* 不再需要 */ }
     function _doLinearPhaseUpdate() { /* 不再需要 */ }
     function generateLinearPhaseImpulse() { return null; }
     function getActiveGainsForLinearPhase() { return currentGains; }
     function performIFFT() { /* 不再需要 */ }
 
-    // ===== 音频拦截 =====
     function installCreateMediaElementSourceIntercept() {
         if (installCreateMediaElementSourceIntercept._installed) return;
         installCreateMediaElementSourceIntercept._installed = true;
@@ -907,7 +530,7 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 }
                 capturedAudioElement = audioElement;
                 audioContext = this;
-                var capturedSource = sourceNode; // 保存局部引用
+                var capturedSource = sourceNode;
 
                 setTimeout(function() {
                     if (!isInitialized && capturedSource) {
@@ -933,9 +556,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
         await insertEQBeforeGain();
     }
-
-    // ===== 查找音频元素 =====
-    var _isFallbackConnect = false;
 
     function findAudioInShadowDOM(root) {
         try {
@@ -978,7 +598,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
             }
 
             console.log('[MoeKoeEQ-MAIN] Audio element found, creating AudioContext...');
-
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             sourceNode = audioContext.createMediaElementSource(audioElement);
             capturedAudioElement = audioElement;
@@ -993,12 +612,13 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     }
 
+    var _isFallbackConnect = false;
+
     function findAndConnectAudioElement() {
         if (isInitialized || isDestroyed) return;
         fallbackConnect();
     }
 
-    // ===== 重置音频状态 =====
     function resetAudioState(fullReset) {
         if (workletNode) {
             try { workletNode.disconnect(); } catch (e) {}
@@ -1018,7 +638,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     }
 
-    // ===== 状态通知 =====
     var notifyDebounceId = null;
     var stateVersion = 0;
 
@@ -1056,11 +675,10 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
             dynamicEQ: dynamicEQConfig, midSideEnabled: midSideEnabled,
             midGains: midGains, sideGains: sideGains,
             linearPhaseEnabled: linearPhaseEnabled,
-            version: '3.0.0' // AudioWorklet 版本
+            version: '3.0.0'
         };
     }
 
-    // ===== 设置管理 =====
     function saveSettings() {
         // 由 content.js 处理
     }
@@ -1103,8 +721,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         if (s.linearPhaseEnabled !== undefined) linearPhaseEnabled = s.linearPhaseEnabled;
 
         sendEQToWorklet();
-        sendEffectsToWorklet();
-        sendDynamicEQToWorklet();
 
         if (!s.dynamicEQ) dynamicEQConfig = Object.assign({}, DYNAMIC_EQ_DEFAULT);
     }
@@ -1115,15 +731,12 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         _storageSettingsApplied = true;
     }
 
-    // ===== 监听器 =====
     function watchAudioContextState() {
         if (!audioContext) return;
-        // AudioWorklet 版本不需要特殊处理
     }
 
     function watchAudioElementSrc() {
         if (!capturedAudioElement) return;
-        // AudioWorklet 版本不需要特殊处理
     }
 
     function disconnectObserver() {
@@ -1154,9 +767,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         var data = event.data;
         if (!data || data.source !== MSG_SRC.CONTENT) return;
 
-        // 调试：记录所有收到的消息
-        console.log('[MoeKoeEQ-MAIN] Received message:', data.type, data);
-
         var payload = data.data || data;
 
         switch (data.type) {
@@ -1164,7 +774,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 if (payload) applySettingsFromStorage(payload);
                 break;
             case 'set-gain':
-                console.log('[MoeKoeEQ-MAIN] set-gain:', payload.index, payload.gain);
                 if (typeof payload.index === 'number' && typeof payload.gain === 'number') {
                     setEQGain(payload.index, payload.gain);
                 }
@@ -1188,7 +797,7 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 if (payload.channelMode) setChannelMode(payload.channelMode);
                 break;
             case 'set-effect':
-                if (data.name && typeof data.value === 'number') {
+                if (!pluginDisabled && payload.effect && typeof payload.value === 'number') {
                     setEffect(payload.effect, payload.value);
                 }
                 break;
@@ -1246,7 +855,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 }, _msgTargetOrigin);
                 break;
             case 'set-plugin-id':
-                // 预留
                 break;
         }
     });
@@ -1256,11 +864,9 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     installCreateMediaElementSourceIntercept();
     console.log('[MoeKoeEQ-MAIN] Intercept installed, waiting for audio element...');
 
-    // MutationObserver 监听 DOM 变化，当 audio 元素被添加时自动连接
     observer = new MutationObserver(function(mutations) {
         if (isInitialized || isDestroyed) return;
         for (var m = 0; m < mutations.length; m++) {
-            // 检查属性变化（src 变化）
             if (mutations[m].type === 'attributes' && mutations[m].target && mutations[m].target.tagName === 'AUDIO') {
                 var audioEl = mutations[m].target;
                 if ((audioEl.src || audioEl.currentSrc) && !hasFailedAudioElement(audioEl)) {
@@ -1269,7 +875,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 }
                 continue;
             }
-            // 检查新增节点
             for (var n = 0; n < mutations[m].addedNodes.length; n++) {
                 var node = mutations[m].addedNodes[n];
                 if (node.tagName === 'AUDIO' && (node.src || node.currentSrc)) {
@@ -1291,7 +896,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     });
 
-    // 监听整个文档的 DOM 变化
     observer.observe(document.documentElement || document.body, {
         childList: true,
         subtree: true,
@@ -1299,7 +903,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         attributeFilter: ['src']
     });
 
-    // 监听 window.Audio 构造函数
     var OrigAudio = window.Audio;
     if (OrigAudio) {
         window.Audio = function(src) {
@@ -1320,7 +923,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         window.Audio.prototype = OrigAudio.prototype;
     }
 
-    // 监听所有 audio 元素的 play 事件
     function attachPlayListeners() {
         var audios = document.querySelectorAll('audio');
         for (var i = 0; i < audios.length; i++) {
@@ -1339,7 +941,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         }
     }
 
-    // 延迟查找音频元素
     var _initTimers = [];
     function retryFindAudio() {
         if (isInitialized || isDestroyed) return;
@@ -1354,14 +955,12 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
     var _retryInterval = setInterval(retryFindAudio, 2000);
 
-    // 状态广播
     stateBroadcastInterval = setInterval(function() {
         if (!isDestroyed && isInitialized) {
             window.postMessage({ source: MSG_SRC.MAIN, type: 'state-response', data: getState() }, _msgTargetOrigin);
         }
     }, 3000);
 
-    // 页面事件
     window.addEventListener('beforeunload', function() {
         saveSettings();
     });
@@ -1373,17 +972,14 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
 
     window.addEventListener('pageshow', function(event) {
         if (event.persisted && isInitialized) {
-            // 恢复
         }
     });
 
     document.addEventListener('visibilitychange', function() {
         if (document.hidden && isInitialized) {
-            // 页面隐藏时可以降低处理频率
         }
     });
 
-    // ===== 导出 API =====
     window.MoeKoeEQ = {
         setEQGain: setEQGain,
         setEQGains: setEQGains,
@@ -1408,6 +1004,6 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
         destroy: fullCleanup
     };
 
-    console.log('[MoeKoeEQ-MAIN] AudioWorklet version loaded');
+    console.log('[MoeKoeEQ-MAIN] AudioWorklet version loaded (simplified)');
 
 })();
