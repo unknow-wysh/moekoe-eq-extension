@@ -1179,15 +1179,100 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
     installCreateMediaElementSourceIntercept();
     console.log('[MoeKoeEQ-MAIN] Intercept installed, waiting for audio element...');
 
+    // MutationObserver 监听 DOM 变化，当 audio 元素被添加时自动连接
+    observer = new MutationObserver(function(mutations) {
+        if (isInitialized || isDestroyed) return;
+        for (var m = 0; m < mutations.length; m++) {
+            // 检查属性变化（src 变化）
+            if (mutations[m].type === 'attributes' && mutations[m].target && mutations[m].target.tagName === 'AUDIO') {
+                var audioEl = mutations[m].target;
+                if ((audioEl.src || audioEl.currentSrc) && !hasFailedAudioElement(audioEl)) {
+                    console.log('[MoeKoeEQ-MAIN] MutationObserver: audio src changed');
+                    setTimeout(function() { fallbackConnect(audioEl); }, 200);
+                }
+                continue;
+            }
+            // 检查新增节点
+            for (var n = 0; n < mutations[m].addedNodes.length; n++) {
+                var node = mutations[m].addedNodes[n];
+                if (node.tagName === 'AUDIO' && (node.src || node.currentSrc)) {
+                    console.log('[MoeKoeEQ-MAIN] MutationObserver: audio element added');
+                    setTimeout(function() { fallbackConnect(node); }, 300);
+                } else if (node.querySelectorAll) {
+                    var audios = node.querySelectorAll('audio');
+                    for (var a = 0; a < audios.length; a++) {
+                        if (audios[a].src || audios[a].currentSrc) {
+                            console.log('[MoeKoeEQ-MAIN] MutationObserver: audio found in added node');
+                            (function(audioEl) {
+                                setTimeout(function() { fallbackConnect(audioEl); }, 300);
+                            })(audios[a]);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // 监听整个文档的 DOM 变化
+    observer.observe(document.documentElement || document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['src']
+    });
+
+    // 监听 window.Audio 构造函数
+    var OrigAudio = window.Audio;
+    if (OrigAudio) {
+        window.Audio = function(src) {
+            var audio = new OrigAudio(src);
+            try {
+                audio.addEventListener('play', function() {
+                    if (!isInitialized && !isDestroyed) {
+                        console.log('[MoeKoeEQ-MAIN] window.Audio play event');
+                        setTimeout(function() { fallbackConnect(audio); }, 100);
+                    }
+                    if (audioContext && audioContext.state === 'suspended') {
+                        audioContext.resume().catch(function() {});
+                    }
+                });
+            } catch (e) {}
+            return audio;
+        };
+        window.Audio.prototype = OrigAudio.prototype;
+    }
+
+    // 监听所有 audio 元素的 play 事件
+    function attachPlayListeners() {
+        var audios = document.querySelectorAll('audio');
+        for (var i = 0; i < audios.length; i++) {
+            if (!audios[i]._moekoePlayListener) {
+                audios[i]._moekoePlayListener = true;
+                audios[i].addEventListener('play', function() {
+                    if (!isInitialized && !isDestroyed) {
+                        console.log('[MoeKoeEQ-MAIN] audio play event');
+                        setTimeout(function() { fallbackConnect(this); }.bind(this), 100);
+                    }
+                    if (audioContext && audioContext.state === 'suspended') {
+                        audioContext.resume().catch(function() {});
+                    }
+                });
+            }
+        }
+    }
+
     // 延迟查找音频元素
     var _initTimers = [];
     function retryFindAudio() {
         if (isInitialized || isDestroyed) return;
+        attachPlayListeners();
         findAndConnectAudioElement();
     }
 
     _initTimers.push(setTimeout(findAndConnectAudioElement, 500));
     _initTimers.push(setTimeout(findAndConnectAudioElement, 1500));
+    _initTimers.push(setTimeout(attachPlayListeners, 1000));
     _initTimers.push(setTimeout(findAndConnectAudioElement, 3000));
 
     var _retryInterval = setInterval(retryFindAudio, 2000);
