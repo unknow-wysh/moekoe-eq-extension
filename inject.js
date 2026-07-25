@@ -473,6 +473,10 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             [left, right] = this._processEffects(left, right);
             [left, right] = this._processLimiter(left, right);
 
+            // 软削波保护，防止爆音
+            left = Math.max(-1, Math.min(1, left));
+            right = Math.max(-1, Math.min(1, right));
+
             if (output[0]) output[0][i] = left;
             if (output[1]) output[1][i] = right;
         }
