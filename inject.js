@@ -191,7 +191,11 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
     _handleMessage(data) {
         switch (data.type) {
             case 'eq':
-                if (data.gains) { for (let i = 0; i < 31; i++) this._eqGains[i] = data.gains[i] || 0; this._eqCoeffsDirty = true; }
+                if (data.gains) {
+                    for (let i = 0; i < 31; i++) this._eqGains[i] = data.gains[i] || 0;
+                    this._eqCoeffsDirty = true;
+                    this.port.postMessage({ type: 'debug', msg: 'EQ gains updated', sample: data.gains.slice(0, 5) });
+                }
                 if (data.qValues) { for (let i = 0; i < 31; i++) this._eqQValues[i] = data.qValues[i] || 1.4; this._eqCoeffsDirty = true; }
                 if (data.enabled !== undefined) this._eqEnabled = data.enabled;
                 break;
@@ -449,12 +453,23 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
         const output = outputs[0];
         if (!input || !input.length || !output || !output.length) return true;
 
+        // 检查是否有有效的 EQ 增益
+        let hasActiveEQ = false;
+        for (let i = 0; i < 31; i++) {
+            if (Math.abs(this._eqGains[i]) > 0.01) {
+                hasActiveEQ = true;
+                break;
+            }
+        }
+
         for (let i = 0; i < input[0].length; i++) {
             let left = input[0] ? input[0][i] : 0;
             let right = input[1] ? input[1][i] : left;
 
-            left = this._processEQ(left);
-            right = this._processEQ(right);
+            if (this._eqEnabled && hasActiveEQ) {
+                left = this._processEQ(left);
+                right = this._processEQ(right);
+            }
             [left, right] = this._processEffects(left, right);
             [left, right] = this._processLimiter(left, right);
 
@@ -463,12 +478,15 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
         }
 
         this._frameCount++;
-        if (this._frameCount % 256 === 0) {
-            const left = input[0] ? input[0][0] : 0;
-            const right = input[1] ? input[1][0] : left;
-            const level = Math.max(Math.abs(left), Math.abs(right));
-            const db = level > 0 ? 20 * Math.log10(level) : -100;
-            this.port.postMessage({ type: 'level', level: db });
+        if (this._frameCount % 1000 === 0) {
+            this.port.postMessage({
+                type: 'debug',
+                msg: 'process running',
+                eqEnabled: this._eqEnabled,
+                hasActiveEQ: hasActiveEQ,
+                gains: Array.from(this._eqGains).slice(0, 5),
+                coeffsDirty: this._eqCoeffsDirty
+            });
         }
 
         return true;
@@ -495,6 +513,9 @@ registerProcessor('moeKoe-eq-processor', MoeKoeEQProcessor);
                 break;
             case 'state':
                 // Worklet 状态
+                break;
+            case 'debug':
+                console.log('[MoeKoeEQ-Worklet]', data.msg, data);
                 break;
         }
     }
