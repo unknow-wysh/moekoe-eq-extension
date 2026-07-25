@@ -245,6 +245,8 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
             const y = c.b0 * output + c.b1 * f.x1 + c.b2 * f.x2 - c.a1 * f.y1 - c.a2 * f.y2;
             f.x2 = f.x1; f.x1 = output; f.y2 = f.y1; f.y1 = y;
             output = y;
+            // 每个频段处理后立即限幅，防止级联放大
+            output = Math.max(-1, Math.min(1, output));
         }
         return output;
     }
@@ -435,16 +437,21 @@ class MoeKoeEQProcessor extends AudioWorkletProcessor {
         const threshold = Math.pow(10, this._limiterThreshold / 20);
         const level = Math.max(Math.abs(left), Math.abs(right));
         const s = this._effectState;
+        
+        // 快速攻击，慢速释放
         if (level > threshold) {
-            s.limiterEnv = Math.max(level, s.limiterEnv * 0.999);
+            s.limiterEnv = Math.max(level, s.limiterEnv * 0.95); // 快速攻击
         } else {
             s.limiterEnv *= (1 - this._limiterRelease);
         }
-        if (s.limiterEnv > threshold) {
-            const gain = threshold / s.limiterEnv;
+        
+        // 始终限制到阈值以下
+        if (level > threshold) {
+            const gain = threshold / level; // 直接按当前电平限制
             left *= gain;
             right *= gain;
         }
+        
         return [left, right];
     }
 
